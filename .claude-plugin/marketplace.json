@@ -1,0 +1,11 @@
+{
+  "name": "usage-band-for-claude",
+  "owner": { "name": "Norrkhan" },
+  "plugins": [
+    {
+      "name": "usage-band-for-claude",
+      "source": "./",
+      "description": "Shows model, effort, ultracode, context use, rate limits and their reset times above the prompt"
+    }
+  ]
+}

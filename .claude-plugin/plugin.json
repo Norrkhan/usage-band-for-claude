@@ -1,8 +1,28 @@
 {
   "name": "usage-band-for-claude",
-  "version": "0.1.0",
-  "description": "Shows model, effort, ultracode, context use, rate limits and their reset times above the prompt",
+  "version": "0.2.0",
+  "description": "Shows model, effort, ultracode, context use, rate limits and their reset times above the prompt, and chimes when Claude finishes or needs you",
   "author": { "name": "Norrkhan" },
   "license": "MIT",
-  "types": "./types/index.d.ts"
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "showBand": {
+      "type": "boolean",
+      "title": "Show usage band",
+      "description": "Show the usage line above the prompt",
+      "default": true
+    },
+    "soundOnDone": {
+      "type": "boolean",
+      "title": "Sound when Claude finishes",
+      "description": "Play a chime when Claude ends a turn",
+      "default": true
+    },
+    "soundOnInput": {
+      "type": "boolean",
+      "title": "Sound when Claude needs input",
+      "description": "Play a chime when Claude asks a question or waits for a permission",
+      "default": true
+    }
+  }
 }

@@ -15,6 +15,23 @@ A Claude Code mod that shows a live, colour-coded usage line right above the pro
 
 Bars and percentages turn green → yellow (60%) → red (85%). Colours follow your Claude Code theme, and the bars shrink on narrow terminals. The 5h/7d limits show on a Claude subscription after the first reply of a session.
 
+It also plays a chime:
+
+- **Done**: when Claude finishes a turn (not when you interrupt it, and not for subagents).
+- **Needs you**: when Claude asks you a question or waits for a permission.
+
+Sounds play through `afplay`, so they work on macOS only.
+
+## Options
+
+Each feature can be turned on or off. You're asked when you install, and you can change them later in `/config`:
+
+| Option | Default | What it does |
+| --- | --- | --- |
+| `showBand` | on | Show the usage line above the prompt |
+| `soundOnDone` | on | Chime when Claude finishes a turn |
+| `soundOnInput` | on | Chime when Claude needs your input |
+
 ## Install
 
 At the prompt of a Claude Code terminal session:

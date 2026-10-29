@@ -134,8 +134,50 @@ async function refresh($: EngineInterface): Promise<void> {
   await update($, snapshot, () => next)
 }
 
-export const register: Register = on => {
+// Notification types that mean Claude is waiting on the person. The idle
+// reminder is left out: the "done" chime already covered that moment.
+const INPUT_NOTIFICATIONS = new Set(['permission_prompt', 'elicitation_dialog'])
+
+// A question can raise both a tool call and a notification; chime once.
+let lastChimeAt = -Infinity
+
+async function chime($: EngineInterface, asset: string): Promise<void> {
+  const now = await $.clock.now()
+  if (now - lastChimeAt < 1_500) return
+  lastChimeAt = now
+  // play() resolves when the clip ends; don't hold the turn for it.
+  void $.audio.play({ asset }).catch(() => undefined)
+}
+
+export const register: Register = (on, options) => {
   let tick: { cancel: () => void } | undefined
+
+  if (options.soundOnDone !== false) {
+    on('turn.complete', async ($, e, next) => {
+      const result = await next(e)
+      // Only the main loop's end, and not when the person interrupted it.
+      if (e.agentId === undefined && e.reason !== 'aborted') {
+        await chime($, 'sounds/done.wav')
+      }
+      return result
+    })
+  }
+
+  if (options.soundOnInput !== false) {
+    on('tool.call', { tool: 'AskUserQuestion' }, async ($, e, next) => {
+      await chime($, 'sounds/input.wav')
+      return next(e)
+    })
+
+    on('classic.Notification', async ($, e, next) => {
+      if (INPUT_NOTIFICATIONS.has(e.notification_type)) {
+        await chime($, 'sounds/input.wav')
+      }
+      return next(e)
+    })
+  }
+
+  if (options.showBand === false) return
 
   on('session.start', async ($, e, next) => {
     const result = await next(e)

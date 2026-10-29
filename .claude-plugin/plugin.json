@@ -1,6 +1,6 @@
 {
   "name": "usage-band-for-claude",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Shows model, effort, ultracode, context use, rate limits and their reset times above the prompt, and chimes when Claude finishes or needs you",
   "author": {
     "name": "Norrkhan"
@@ -25,6 +25,21 @@
       "title": "Sound when Claude needs input",
       "description": "Play a chime when Claude asks a question or waits for a permission",
       "default": true
+    },
+    "chimeStyle": {
+      "type": "string",
+      "title": "Chime style",
+      "description": "Which chimes to play: classic, soft, marimba, arcade, glass or pop, or random for a different style each time. Hear one with /chimes <style>.",
+      "options": [
+        "classic",
+        "soft",
+        "marimba",
+        "arcade",
+        "glass",
+        "pop",
+        "random"
+      ],
+      "default": "classic"
     },
     "soundMode": {
       "type": "string",

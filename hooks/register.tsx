@@ -138,12 +138,38 @@ async function refresh($: EngineInterface): Promise<void> {
 // reminder is left out: the "done" chime already covered that moment.
 const INPUT_NOTIFICATIONS = new Set(['permission_prompt', 'elicitation_dialog'])
 
-const ALERTS = {
-  done: { asset: 'sounds/done.wav', text: 'Claude finished' },
-  input: { asset: 'sounds/input.wav', text: 'Claude needs your input' },
+const ALERT_TEXT = {
+  done: 'Claude finished',
+  input: 'Claude needs your input',
 } as const
 
-type Alert = keyof typeof ALERTS
+type Alert = keyof typeof ALERT_TEXT
+
+// Each style is a folder under sounds/ holding done.wav and input.wav.
+export const CHIME_STYLES = ['classic', 'soft', 'marimba', 'arcade', 'glass', 'pop'] as const
+export type ChimeStyle = (typeof CHIME_STYLES)[number]
+
+export function isChimeStyle(value: unknown): value is ChimeStyle {
+  return CHIME_STYLES.includes(value as ChimeStyle)
+}
+
+// What the chimeStyle option can hold: a style, or a different one each time.
+export type StyleChoice = ChimeStyle | 'random'
+
+export function isStyleChoice(value: unknown): value is StyleChoice {
+  return value === 'random' || isChimeStyle(value)
+}
+
+// Resolves a choice to a style; random never repeats the previous pick.
+export function pickStyle(choice: StyleChoice, previous?: ChimeStyle, random: () => number = Math.random): ChimeStyle {
+  if (choice !== 'random') return choice
+  const pool = CHIME_STYLES.filter(style => style !== previous)
+  return pool[Math.floor(random() * pool.length)] ?? pool[0]
+}
+
+export function chimeAsset(style: ChimeStyle, alert: Alert): string {
+  return `sounds/${style}/${alert}.wav`
+}
 // chime: play the sound file where Claude Code runs. bell: notify through the
 // terminal, which reaches your own machine over SSH. auto: bell over SSH or
 // when there's no player, chime otherwise.
@@ -201,8 +227,9 @@ async function ring($: EngineInterface, text: string): Promise<boolean> {
   return sent?.isSent === true
 }
 
-async function deliver($: EngineInterface, alert: Alert, mode: SoundMode): Promise<void> {
-  const { asset, text } = ALERTS[alert]
+async function deliver($: EngineInterface, alert: Alert, mode: SoundMode, style: ChimeStyle): Promise<void> {
+  const asset = chimeAsset(style, alert)
+  const text = ALERT_TEXT[alert]
   if (mode === 'bell' || (mode === 'auto' && (await isOverSsh($)))) {
     await ring($, text)
     return
@@ -214,24 +241,90 @@ async function deliver($: EngineInterface, alert: Alert, mode: SoundMode): Promi
 // A question can raise both a tool call and a notification; alert once.
 let lastAlertAt = -Infinity
 
-async function alertPerson($: EngineInterface, alert: Alert, mode: SoundMode): Promise<void> {
+// The last style random played, so the next one differs.
+let lastRandomStyle: ChimeStyle | undefined
+
+function resolveStyle(choice: StyleChoice): ChimeStyle {
+  const style = pickStyle(choice, lastRandomStyle)
+  if (choice === 'random') lastRandomStyle = style
+  return style
+}
+
+async function alertPerson($: EngineInterface, alert: Alert, mode: SoundMode, choice: StyleChoice): Promise<void> {
   const now = await $.clock.now()
   if (now - lastAlertAt < 1_500) return
   lastAlertAt = now
+  const style = resolveStyle(choice)
   // Playing resolves when the clip ends; don't hold the turn for it.
-  void deliver($, alert, mode).catch(() => undefined)
+  void deliver($, alert, mode, style).catch(() => undefined)
+}
+
+const NO_PLAYER = 'No audio player was found on the machine Claude Code runs on.'
+
+// Plays a style's two chimes one after the other; false when nothing could.
+async function playStyle($: EngineInterface, style: ChimeStyle): Promise<boolean> {
+  return (
+    (await playLocally($, chimeAsset(style, 'done')).catch(() => false)) &&
+    (await playLocally($, chimeAsset(style, 'input')).catch(() => false))
+  )
+}
+
+// /chimes <style>: one style's two chimes.
+async function preview($: EngineInterface, choice: StyleChoice): Promise<string> {
+  const style = resolveStyle(choice)
+  if (!(await playStyle($, style))) return NO_PLAYER
+  const which = choice === 'random' ? `"${style}" (picked at random)` : `"${style}"`
+  return `Played ${which}: finished, then needs input. Pick a style with chimeStyle in /config.`
+}
+
+// /chimes all: every style in order, a short pause between them.
+async function previewAll($: EngineInterface): Promise<string> {
+  for (const [i, style] of CHIME_STYLES.entries()) {
+    if (i > 0) await $.clock.sleep(400)
+    if (!(await playStyle($, style))) return NO_PLAYER
+  }
+  return `Played every style in order: ${CHIME_STYLES.join(', ')}. Pick one with chimeStyle in /config.`
 }
 
 export const register: Register = (on, options) => {
   let tick: { cancel: () => void } | undefined
   const soundMode: SoundMode = options.soundMode === 'chime' || options.soundMode === 'bell' ? options.soundMode : 'auto'
+  const chimeStyle: StyleChoice = isStyleChoice(options.chimeStyle) ? options.chimeStyle : 'classic'
+
+  const showBand = options.showBand !== false
+
+  on('session.start', async ($, e, next) => {
+    await $.command.register({
+      name: 'chimes',
+      description: 'Hear a chime style (the current one when no style is given)',
+      argumentHint: `[${CHIME_STYLES.join('|')}|random|all]`,
+    })
+    const result = await next(e)
+    if (showBand) {
+      await refresh($)
+      tick?.cancel()
+      // Keep the reset countdowns current while idle.
+      tick = $.clock.every(60_000, () => refresh($))
+    }
+    return result
+  })
+
+  on('command.run', { command: 'chimes' }, async ($, e) => {
+    const asked = e.args.trim().toLowerCase()
+    if (asked === '') return { text: await preview($, chimeStyle) }
+    if (asked === 'all') return { text: await previewAll($) }
+    if (!isStyleChoice(asked)) {
+      return { text: `No style "${asked}". Try one of: ${CHIME_STYLES.join(', ')}, random or all.` }
+    }
+    return { text: await preview($, asked) }
+  })
 
   if (options.soundOnDone !== false) {
     on('turn.complete', async ($, e, next) => {
       const result = await next(e)
       // Only the main loop's end, and not when the person interrupted it.
       if (e.agentId === undefined && e.reason !== 'aborted') {
-        await alertPerson($, 'done', soundMode)
+        await alertPerson($, 'done', soundMode, chimeStyle)
       }
       return result
     })
@@ -239,28 +332,19 @@ export const register: Register = (on, options) => {
 
   if (options.soundOnInput !== false) {
     on('tool.call', { tool: 'AskUserQuestion' }, async ($, e, next) => {
-      await alertPerson($, 'input', soundMode)
+      await alertPerson($, 'input', soundMode, chimeStyle)
       return next(e)
     })
 
     on('classic.Notification', async ($, e, next) => {
       if (INPUT_NOTIFICATIONS.has(e.notification_type)) {
-        await alertPerson($, 'input', soundMode)
+        await alertPerson($, 'input', soundMode, chimeStyle)
       }
       return next(e)
     })
   }
 
-  if (options.showBand === false) return
-
-  on('session.start', async ($, e, next) => {
-    const result = await next(e)
-    await refresh($)
-    tick?.cancel()
-    // Keep the reset countdowns current while idle.
-    tick = $.clock.every(60_000, () => refresh($))
-    return result
-  })
+  if (!showBand) return
 
   on('prompt.submit', async ($, e, next) => {
     // Never let the band get in the way of sending a prompt.

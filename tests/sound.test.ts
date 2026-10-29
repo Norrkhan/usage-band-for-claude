@@ -1,8 +1,15 @@
 import { expect, test } from 'claude-code/testing'
 import type { On } from 'claude-code/testing'
 
+import { CHIME_STYLES, pickStyle } from '../hooks/register'
+
 const TURN = { answer: 'ok', durationMs: 10, isAborted: false, turnId: 't1', reason: 'answer' } as const
 const PERMISSION = { message: 'Claude needs your permission', notification_type: 'permission_prompt' } as const
+const CHIMES = {
+  command: 'chimes',
+  origin: { kind: 'composer' },
+  presentation: { isFullscreen: false, columns: 80 },
+} as const
 
 type Host = {
   os?: 'Darwin' | 'Linux' | 'Windows'
@@ -45,6 +52,9 @@ function fakeHost(on: On, host: Host = {}): string[] {
   on('turn.complete', (_, e) => ({ text: e.answer }))
   on('tool.call', () => ({ result: {} }))
   on('classic.Notification', () => ({}))
+  on('command.register', () => ({ value: { command: 'chimes' } }))
+  on('clock.sleep', () => ({ value: undefined }))
+  on('session.start', (_, e) => ({ cwd: e.cwd }))
   return heard
 }
 
@@ -57,7 +67,7 @@ test('chimes when the main loop finishes a turn', async ($, on) => {
   const heard = fakeHost(on)
   await $.turn.complete(TURN)
   await settle()
-  expect(heard).toEqual(['play:sounds/done.wav'])
+  expect(heard).toEqual(['play:sounds/classic/done.wav'])
 })
 
 test('stays quiet for interrupted turns and subagents', async ($, on) => {
@@ -74,7 +84,7 @@ test('chimes when Claude asks or waits for a permission, once per moment', async
   await $.classic.Notification(PERMISSION)
   await $.classic.Notification({ message: 'Claude is waiting', notification_type: 'idle_prompt' })
   await settle()
-  expect(heard).toEqual(['play:sounds/input.wav'])
+  expect(heard).toEqual(['play:sounds/classic/input.wav'])
 })
 
 test('sounds can be turned off', { options: { soundOnDone: false, soundOnInput: false } }, async ($, on) => {
@@ -117,7 +127,7 @@ test('chime mode plays on the machine even over SSH', { options: { soundMode: 'c
   const heard = fakeHost(on, { env: { SSH_TTY: '/dev/pts/0' } })
   await $.turn.complete(TURN)
   await settle()
-  expect(heard).toEqual(['play:sounds/done.wav'])
+  expect(heard).toEqual(['play:sounds/classic/done.wav'])
 })
 
 test('bell mode always notifies through the terminal', { options: { soundMode: 'bell' } }, async ($, on) => {
@@ -125,4 +135,65 @@ test('bell mode always notifies through the terminal', { options: { soundMode: '
   await $.turn.complete(TURN)
   await settle()
   expect(heard).toEqual(['notify:Claude finished'])
+})
+
+test('plays the chime style picked in the options', { options: { chimeStyle: 'marimba' } }, async ($, on) => {
+  const heard = fakeHost(on)
+  await $.turn.complete(TURN)
+  await $.classic.Notification(PERMISSION)
+  await settle()
+  expect(heard).toEqual(['play:sounds/marimba/done.wav', 'play:sounds/marimba/input.wav'])
+})
+
+test('/chimes plays the current style, or the one named', { options: { chimeStyle: 'soft' } }, async ($, on) => {
+  const heard = fakeHost(on)
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+
+  const current = await $.command.run({ ...CHIMES, args: '' })
+  expect(current.text.includes('"soft"')).toBe(true)
+  const named = await $.command.run({ ...CHIMES, args: ' Arcade ' })
+  expect(named.text.includes('"arcade"')).toBe(true)
+  expect(heard).toEqual([
+    'play:sounds/soft/done.wav',
+    'play:sounds/soft/input.wav',
+    'play:sounds/arcade/done.wav',
+    'play:sounds/arcade/input.wav',
+  ])
+
+  const unknown = await $.command.run({ ...CHIMES, args: 'kazoo' })
+  expect(unknown.text.includes('classic, soft, marimba, arcade, glass, pop')).toBe(true)
+})
+
+test('random picks any style but never the one before', async () => {
+  expect(pickStyle('glass', 'glass')).toBe('glass')
+  expect(pickStyle('random', undefined, () => 0)).toBe('classic')
+  expect(pickStyle('random', 'classic', () => 0)).toBe('soft')
+  expect(pickStyle('random', 'pop', () => 0.999)).toBe('glass')
+})
+
+test('random plays a different style each time', { options: { chimeStyle: 'random' } }, async ($, on) => {
+  const heard = fakeHost(on)
+  for (let i = 0; i < 6; i++) await $.turn.complete(TURN)
+  await settle()
+
+  const styles = heard.map(sound => sound.split('/')[1])
+  expect(styles.length).toBe(6)
+  expect(styles.every(style => (CHIME_STYLES as readonly string[]).includes(style))).toBe(true)
+  expect(styles.every((style, i) => i === 0 || style !== styles[i - 1])).toBe(true)
+})
+
+test('/chimes random names the style it picked', async ($, on) => {
+  const heard = fakeHost(on)
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  const result = await $.command.run({ ...CHIMES, args: 'random' })
+  const style = heard[0]?.split('/')[1]
+  expect(result.text.includes(`"${style}" (picked at random)`)).toBe(true)
+})
+
+test('/chimes all plays every style once, in order', async ($, on) => {
+  const heard = fakeHost(on)
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  const result = await $.command.run({ ...CHIMES, args: 'all' })
+  expect(heard).toEqual(CHIME_STYLES.flatMap(style => [`play:sounds/${style}/done.wav`, `play:sounds/${style}/input.wav`]))
+  expect(result.text.includes('classic, soft, marimba, arcade, glass, pop')).toBe(true)
 })

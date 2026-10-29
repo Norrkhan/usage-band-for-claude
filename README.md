@@ -20,6 +20,20 @@ It also plays a chime:
 - **Done**: when Claude finishes a turn (not when you interrupt it, and not for subagents).
 - **Needs you**: when Claude asks you a question or waits for a permission.
 
+There are six chime styles to choose from:
+
+| Style | Sounds like |
+| --- | --- |
+| `classic` | Two bright pings (the default) |
+| `soft` | Low, gentle tones |
+| `marimba` | Wooden mallet notes |
+| `arcade` | 8-bit game blips |
+| `glass` | A shimmering bell |
+| `pop` | Quick bubble pops |
+| `random` | A different style each time |
+
+Hear one with `/chimes <style>`, the one you're using with `/chimes`, or every style in order with `/chimes all`.
+
 Where Claude Code runs on your own machine, the sound plays there: through `afplay` on macOS, PowerShell on Windows, and `paplay`, `pw-play` or `aplay` on Linux (the first one installed).
 
 Over SSH, playing on the server would be no use, so it sends a notification through your terminal instead, which travels back over the connection. It also does this on a Linux machine with no audio player. What you hear then depends on your terminal and on Claude Code's `preferredNotifChannel` setting: set it to `terminal_bell` in `/config` for a plain bell, which most terminals play as a sound (some flash instead).
@@ -33,6 +47,7 @@ Each feature can be turned on or off. You're asked when you install, and you can
 | `showBand` | on | Show the usage line above the prompt |
 | `soundOnDone` | on | Chime when Claude finishes a turn |
 | `soundOnInput` | on | Chime when Claude needs your input |
+| `chimeStyle` | `classic` | Which chimes to play: `classic`, `soft`, `marimba`, `arcade`, `glass` or `pop`, or `random` for a different one each time |
 | `soundMode` | `auto` | `auto`: play the sound file, or notify through the terminal over SSH or when there's no player. `chime`: always play the file where Claude Code runs. `bell`: always notify through the terminal |
 
 ## Install
@@ -54,6 +69,10 @@ claude plugin install usage-band-for-claude --marketplace Norrkhan/usage-band-fo
 In the desktop app: click **+** next to the prompt box, then **Plugins**, **Add marketplace** with `Norrkhan/usage-band-for-claude`, then **Add plugin**.
 
 Collapse the line with `[-]` or `ctrl+x ctrl+a`.
+
+## Sounds
+
+All the chimes are synthesized by [scripts/make_chimes.py](scripts/make_chimes.py). Rebuild them with `python3 scripts/make_chimes.py`.
 
 ## License
 

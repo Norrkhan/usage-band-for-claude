@@ -138,26 +138,100 @@ async function refresh($: EngineInterface): Promise<void> {
 // reminder is left out: the "done" chime already covered that moment.
 const INPUT_NOTIFICATIONS = new Set(['permission_prompt', 'elicitation_dialog'])
 
-// A question can raise both a tool call and a notification; chime once.
-let lastChimeAt = -Infinity
+const ALERTS = {
+  done: { asset: 'sounds/done.wav', text: 'Claude finished' },
+  input: { asset: 'sounds/input.wav', text: 'Claude needs your input' },
+} as const
 
-async function chime($: EngineInterface, asset: string): Promise<void> {
+type Alert = keyof typeof ALERTS
+// chime: play the sound file where Claude Code runs. bell: notify through the
+// terminal, which reaches your own machine over SSH. auto: bell over SSH or
+// when there's no player, chime otherwise.
+export type SoundMode = 'auto' | 'chime' | 'bell'
+type Platform = 'darwin' | 'linux' | 'windows' | 'unknown'
+
+// Tried in order on Linux: PulseAudio/PipeWire, PipeWire alone, then ALSA.
+const LINUX_PLAYERS = ['paplay', 'pw-play', 'aplay']
+
+let platform: Platform | undefined
+
+async function detectPlatform($: EngineInterface): Promise<Platform> {
+  if (platform !== undefined) return platform
+  if ((await $.env.get('OS')) === 'Windows_NT') {
+    platform = 'windows'
+  } else {
+    const uname = await $.process.run(['uname', '-s'], { timeoutMs: 5_000 }).catch(() => undefined)
+    const name = uname?.stdout.trim()
+    platform = name === 'Darwin' ? 'darwin' : name === 'Linux' ? 'linux' : 'unknown'
+  }
+  return platform
+}
+
+async function isOverSsh($: EngineInterface): Promise<boolean> {
+  const [connection, tty] = await Promise.all([$.env.get('SSH_CONNECTION'), $.env.get('SSH_TTY')])
+  return connection !== undefined || tty !== undefined
+}
+
+// Plays the file on the machine Claude Code runs on; false when nothing could.
+async function playLocally($: EngineInterface, asset: string): Promise<boolean> {
+  const os = await detectPlatform($)
+  if (os === 'darwin') {
+    await $.audio.play({ asset })
+    return true
+  }
+  const path = `${$.plugin.root}/${asset}`
+  if (os === 'windows') {
+    const script = `(New-Object Media.SoundPlayer '${path.replaceAll("'", "''")}').PlaySync()`
+    const { exitCode } = await $.process.run(['powershell', '-NoProfile', '-NonInteractive', '-Command', script], {
+      timeoutMs: 10_000,
+    })
+    return exitCode === 0
+  }
+  if (os === 'linux') {
+    for (const player of LINUX_PLAYERS) {
+      const result = await $.process.run([player, path], { timeoutMs: 10_000 }).catch(() => undefined)
+      if (result?.exitCode === 0) return true
+    }
+  }
+  return false
+}
+
+async function ring($: EngineInterface, text: string): Promise<boolean> {
+  const sent = await $.ui.notify(text, { title: 'Claude Code' }).catch(() => undefined)
+  return sent?.isSent === true
+}
+
+async function deliver($: EngineInterface, alert: Alert, mode: SoundMode): Promise<void> {
+  const { asset, text } = ALERTS[alert]
+  if (mode === 'bell' || (mode === 'auto' && (await isOverSsh($)))) {
+    await ring($, text)
+    return
+  }
+  const played = await playLocally($, asset).catch(() => false)
+  if (!played && mode === 'auto') await ring($, text)
+}
+
+// A question can raise both a tool call and a notification; alert once.
+let lastAlertAt = -Infinity
+
+async function alertPerson($: EngineInterface, alert: Alert, mode: SoundMode): Promise<void> {
   const now = await $.clock.now()
-  if (now - lastChimeAt < 1_500) return
-  lastChimeAt = now
-  // play() resolves when the clip ends; don't hold the turn for it.
-  void $.audio.play({ asset }).catch(() => undefined)
+  if (now - lastAlertAt < 1_500) return
+  lastAlertAt = now
+  // Playing resolves when the clip ends; don't hold the turn for it.
+  void deliver($, alert, mode).catch(() => undefined)
 }
 
 export const register: Register = (on, options) => {
   let tick: { cancel: () => void } | undefined
+  const soundMode: SoundMode = options.soundMode === 'chime' || options.soundMode === 'bell' ? options.soundMode : 'auto'
 
   if (options.soundOnDone !== false) {
     on('turn.complete', async ($, e, next) => {
       const result = await next(e)
       // Only the main loop's end, and not when the person interrupted it.
       if (e.agentId === undefined && e.reason !== 'aborted') {
-        await chime($, 'sounds/done.wav')
+        await alertPerson($, 'done', soundMode)
       }
       return result
     })
@@ -165,13 +239,13 @@ export const register: Register = (on, options) => {
 
   if (options.soundOnInput !== false) {
     on('tool.call', { tool: 'AskUserQuestion' }, async ($, e, next) => {
-      await chime($, 'sounds/input.wav')
+      await alertPerson($, 'input', soundMode)
       return next(e)
     })
 
     on('classic.Notification', async ($, e, next) => {
       if (INPUT_NOTIFICATIONS.has(e.notification_type)) {
-        await chime($, 'sounds/input.wav')
+        await alertPerson($, 'input', soundMode)
       }
       return next(e)
     })
